@@ -1,0 +1,455 @@
+\chapter{Программный код}\label{appendix-extra-examples}
+
+\begin{lstlisting}[language=Java]
+package io.jenkins.plugins.sample;
+
+import hudson.model.Action;
+import hudson.model.Job;
+
+import java.text.ParseException;
+import java.util.Map;
+
+public class BuildConfigurationStatisticsAction implements Action {
+
+    private Job job;
+
+    public BuildConfigurationStatisticsAction(Job job) {
+        this.job = job;
+    }
+
+    @Override
+    public String getIconFileName() {
+        return "document.png";
+    }
+
+    @Override
+    public String getDisplayName() {
+        return "Build Configuration Statistics";
+    }
+
+    @Override
+    public String getUrlName() {
+        return "buildConfigurationStatistics";
+    }
+
+    public Job getJob() {
+        return job;
+    }
+
+    public Map<Integer, Double> getBuildDuration() throws ParseException {
+        return new BuildDurationLogic("month", job.getBuilds()).getBuildsDuration();
+    }
+
+}
+\end{lstlisting}
+
+\begin{lstlisting}[language=Java]
+package io.jenkins.plugins.sample;
+
+
+import hudson.Extension;
+import hudson.model.Action;
+import hudson.model.Job;
+import jenkins.model.TransientActionFactory;
+
+import javax.annotation.Nonnull;
+import java.util.Collection;
+import java.util.Collections;
+
+@Extension
+public class BuildConfigurationStatisticsFactory extends TransientActionFactory<Job> {
+    @Override
+    public Class<Job> type() {
+        return Job.class;
+    }
+
+    @Nonnull
+    @Override
+    public Collection<? extends Action> createFor(@Nonnull Job job) {
+        return Collections.singletonList(new BuildConfigurationStatisticsAction(job));
+    }
+}
+\end{lstlisting}
+
+
+\begin{lstlisting}[language=Java]
+package io.jenkins.plugins.sample;
+
+import hudson.model.Run;
+import hudson.util.RunList;
+
+import java.text.ParseException;
+import java.util.HashMap;
+import java.util.Map;
+
+public class BuildDurationLogic {
+
+    String period;
+    RunList<Run> buildList;
+    public BuildDurationLogic(String period, RunList<Run> buildList) {
+        this.period = period;
+        this.buildList = buildList;
+    }
+
+    public void filterPeriodBuild(){
+        if (period == "month") {
+            this.buildList = buildList
+                    .filter(run -> {
+                        try {
+                            return run.getStartTimeInMillis() >= DateTimeHandler.convertDateToLongTime("2023 11 01 00:00:00");
+                        } catch (ParseException e) {
+                            throw new RuntimeException(e);
+                        }
+                    });
+        }
+    }
+
+    public Map<Integer, Double> getBuildsDuration() throws ParseException {
+        filterPeriodBuild();
+        Map<Integer, Double> dayDuration = new HashMap<Integer, Double>();
+        for (Run run : this.buildList) {
+            int day = DateTimeHandler.getDayOfMonth(DateTimeHandler.convertLongTimeToDate(run.getStartTimeInMillis()));
+            if (dayDuration.containsKey(day)){
+                dayDuration.put(day,dayDuration.get(day) + run.getDuration()/1000.0);
+            } else {
+                dayDuration.put(day,run.getDuration()/1000.0);
+            }
+        }
+        return dayDuration;
+    }
+}
+\end{lstlisting}
+
+\begin{lstlisting}[language=Java]
+package io.jenkins.plugins.sample;
+
+import java.text.Format;
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
+import java.util.Calendar;
+import java.util.Date;
+
+public class DateTimeHandler {
+    public static String convertLongTimeToDate(long time){
+        Date date = new Date(time);
+        Format format = new SimpleDateFormat("yyyy MM dd HH:mm:ss");
+        return format.format(date);
+    }
+    /*
+    * date format = yyyy MM dd HH:mm:ss
+    *
+    * */
+    public static long convertDateToLongTime(String date) throws ParseException {
+        SimpleDateFormat formatter = new SimpleDateFormat("yyyy MM dd HH:mm:ss");
+        return formatter.parse(date).getTime();
+    }
+
+
+    public static int getDayOfMonth(String aDate) throws ParseException {
+        SimpleDateFormat formatter = new SimpleDateFormat("yyyy MM dd HH:mm:ss");
+        Calendar cal = Calendar.getInstance();
+        cal.setTime(formatter.parse(aDate));
+        return cal.get(Calendar.DAY_OF_MONTH);
+    }
+}
+\end{lstlisting}
+
+\begin{lstlisting}
+const labels = Array.from({length: 30}, (_, i) => i + 1);
+const data = {
+  labels: labels,
+  datasets: [{
+    label: 'Success rate',
+    data: Array.from({length: 30}, () => Math.floor(Math.random() * 100)),
+    backgroundColor: [
+      'rgba(0, 255, 0, 0.5)',
+    ],
+    borderColor: [
+      'rgb(0, 69, 36)',
+    ],
+    categoryPercentage: 1,
+    borderWidth: 1,
+    barPercentage: 1,
+  }]
+};
+
+var buildDuration = document.querySelectorAll(".buildDuration");
+var dataBuildDurationValues = Array.from({length: 30}, () => 0);
+for (var i=0; i<buildDuration.length; i++){
+    console.log(buildDuration[i]);
+    dataBuildDurationValues.splice(parseInt(buildDuration[i].querySelector('.key').textContent, 10) - 1, 1, parseFloat(buildDuration[i].querySelector('.value').textContent));
+    console.log(dataBuildDurationValues[i]);
+}
+
+
+
+const dataBuildDuration = {
+  labels: labels,
+  datasets: [{
+    label: 'Build duration',
+    data: dataBuildDurationValues,
+    borderColor: [
+      'rgba(0, 180, 33, 1)',
+    ],
+    tension: 0.1
+
+  }]
+};
+
+const dataTimeSpentQueue = {
+  labels: labels,
+  datasets: [{
+    label: 'Time Spent In Queue',
+    data: Array.from({length: 30}, () => Math.floor(Math.random() * 60)),
+    borderColor: [
+      'rgba(0, 180, 33, 1)',
+    ],
+    tension: 0.1
+
+  }]
+};
+const dataTestCount = {
+  labels: labels,
+  datasets: [{
+    label: 'Test Count',
+    data: Array.from({length: 30}, () => Math.floor(Math.random() * 60)),
+    borderColor: [
+      'rgba(0, 180, 33, 1)',
+    ],
+    tension: 0.1
+
+  }]
+};
+const dataArtifactsSize = {
+  labels: labels,
+  datasets: [{
+    label: 'Artifacts Size',
+    data: Array.from({length: 30}, () => Math.floor(Math.random() * 60)),
+    borderColor: [
+      'rgba(0, 180, 33, 1)',
+    ],
+    tension: 0.1
+
+  }]
+};
+
+
+
+
+
+
+
+
+var allPerf = {
+                        type: 'bar',
+                        data: data,
+                        options: {
+                            scales: {
+                                  y: {
+                                    beginAtZero: true
+                                  }
+                                }
+                        }
+                      };
+
+
+var settingsBuildDuration = {
+                        type: 'line',
+                        data: dataBuildDuration,
+                      };
+var settingsTimeSpentQueue = {
+                        type: 'line',
+                        data: dataTimeSpentQueue,
+                      };
+var settingsTestCount = {
+                        type: 'line',
+                        data: dataTestCount,
+                      };
+var settingsArtifactsSize = {
+                        type: 'line',
+                        data: dataArtifactsSize,
+                      };
+var ctx = document.getElementById("successRateChart").getContext("2d");
+var ctxBuild = document.getElementById("buildDurationChart").getContext("2d");
+var ctxTimeSpentQueue = document.getElementById("timeSpentQueue").getContext("2d");
+var ctxTestCount = document.getElementById("testCount").getContext("2d");
+var ctxArtifactsSize = document.getElementById("artifactsSize").getContext("2d");
+perfChartJsCharts["successRateChart"] = new Chart(ctx, allPerf);
+perfChartJsCharts["buildDurationChart"] = new Chart(ctxBuild, settingsBuildDuration);
+perfChartJsCharts["timeSpentQueue"] = new Chart(ctxTimeSpentQueue, settingsTimeSpentQueue);
+perfChartJsCharts["testCount"] = new Chart(ctxTestCount, settingsTestCount);
+perfChartJsCharts["artifactsSize"] = new Chart(ctxArtifactsSize, settingsArtifactsSize);
+
+
+
+
+\end{lstlisting}
+
+\begin{lstlisting}
+<?jelly escape-by-default='true'?>
+<j:jelly xmlns:j="jelly:core" xmlns:l="/lib/layout" xmlns:st="jelly:stapler">
+        <head>
+                <style>
+                        .buildDuration{
+                                display:none;
+                        }
+                        .graph-container {
+                        width: 90%;
+
+                        }
+                        .graph-block{
+                                padding: 5px;
+                                border: 1px solid grey;
+                                margin: 10px;
+                                display: flex;
+
+                        }
+                        .canvas-container{
+                        width: 80%;
+
+                        }
+                        .settings{
+                        padding: 5px;
+
+                        margin: 10px;
+                        display: flex;
+                        flex-direction: column;
+
+                        }
+                        form label{
+                        margin: 5px;
+                        }
+                </style>
+        </head>
+
+        <st:adjunct includes="io.jenkins.plugins.sample.BuildConfigurationStatisticsAction.declareChartJsClickArray"/>
+        <l:layout title="Build Configuration Statistics">
+                <l:side-panel>
+                        <st:include page="sidepanel.jelly" it="${it.job}" optional="true" />
+                </l:side-panel>
+                <l:main-panel>
+                        <h1>Statistics for job ${it.job.name}</h1>
+                        <j:forEach var="type" items="${it.getBuildDuration()}">
+                                <p class="buildDuration">
+                                        <span class="key">${type.key}</span>
+                                        <span class="value">${type.value}</span>
+                                </p>
+                        </j:forEach>
+                        <div class="graph-container">
+                        <div class="graph-block">
+                                <div class="canvas-container">
+                                <canvas id="successRateChart" width="90" height="15"></canvas>
+                                </div>
+                                <form class="settings">
+                                        <label>
+                                                Range:
+                                                <select>
+                                                        <option>Month</option>
+                                                        <option>Day</option>
+                                                        <option>Year</option>
+                                                </select>
+
+                                        </label>
+
+                                </form>
+                        </div>
+                        <div class="graph-block">
+                                <div class="canvas-container">
+                                <canvas id="buildDurationChart" width="90" height="15"></canvas>
+                                </div>
+                                <form class="settings">
+                                        <label>
+                                                Range:
+                                                <select>
+                                                        <option>Month</option>
+                                                        <option>Day</option>
+                                                        <option>Year</option>
+                                                </select>
+
+                                        </label>
+                                        <label>
+                                        Average:
+                                        <input type="checkbox"/>
+                                        </label>
+                                        <label>
+                                                Show failed:
+                                                <input type="checkbox"/>
+                                        </label>
+
+                                </form>
+                        </div>
+                        <div class="graph-block">
+                                <div class="canvas-container">
+                                <canvas id="timeSpentQueue" width="90" height="15"></canvas>
+                                </div>
+                                <form class="settings">
+                                        <label>
+                                                Range:
+                                                <select>
+                                                        <option>Month</option>
+                                                        <option>Day</option>
+                                                        <option>Year</option>
+                                                </select>
+
+                                        </label>
+                                        <label>
+                                                Average:
+                                                <input type="checkbox"/>
+                                        </label>
+
+                                </form>
+                        </div>
+                        <div class="graph-block">
+                                <div class="canvas-container">
+                                <canvas id="testCount" width="90" height="15"></canvas>
+                                </div>
+                                <form class="settings">
+                                        <label>
+                                                Range:
+                                                <select>
+                                                        <option>Month</option>
+                                                        <option>Day</option>
+                                                        <option>Year</option>
+                                                </select>
+
+                                        </label>
+                                        <label>
+                                                Show failed:
+                                                <input type="checkbox"/>
+                                        </label>
+
+                                </form>
+                        </div>
+                        <div class="graph-block">
+                                <div class="canvas-container">
+                                <canvas id="artifactsSize" width="90" height="15"></canvas>
+                                </div>
+                                <form class="settings">
+                                        <label>
+                                                Range:
+                                                <select>
+                                                        <option>Month</option>
+                                                        <option>Day</option>
+                                                        <option>Year</option>
+                                                </select>
+
+                                        </label>
+                                        <label>
+                                                Average:
+                                                <input type="checkbox"/>
+                                        </label>
+                                        <label>
+                                                Show failed:
+                                                <input type="checkbox"/>
+                                        </label>
+
+                                </form>
+                        </div>
+                        </div>
+
+                </l:main-panel>
+        </l:layout>
+        <st:adjunct includes="io.jenkins.plugins.sample.BuildConfigurationStatisticsAction.chartLogicBox"/>
+</j:jelly>
+\end{lstlisting}
+
