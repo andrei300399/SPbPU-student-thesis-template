@@ -5,11 +5,22 @@ package io.jenkins.plugins.sample;
 
 import hudson.model.Action;
 import hudson.model.Job;
+import jenkins.security.stapler.StaplerDispatchable;
+import org.kohsuke.stapler.StaplerRequest;
+import org.kohsuke.stapler.StaplerResponse;
+import org.kohsuke.stapler.bind.JavaScriptMethod;
+import org.kohsuke.stapler.interceptor.RequirePOST;
 
+import javax.servlet.ServletException;
+import java.io.IOException;
 import java.text.ParseException;
 import java.util.Map;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public class BuildConfigurationStatisticsAction implements Action {
+
+
 
     private Job job;
 
@@ -36,11 +47,83 @@ public class BuildConfigurationStatisticsAction implements Action {
         return job;
     }
 
-    public Map<Integer, Double> getBuildDuration() throws ParseException {
-        return new BuildDurationLogic("month", job.getBuilds()).getBuildsDuration();
+    public Map<String, Double> getBuildDuration(String period, String fail, String average) throws ParseException {
+        Logger LOGGER = Logger.getLogger("uuu");
+        LOGGER.log(Level.INFO, "arg jelly: " + period);
+        LOGGER.log(Level.INFO, "failed status: " + fail);
+        LOGGER.log(Level.INFO, "avg status: " + average);
+        IntervalDate intreval = IntervalDate.valueOf(period);
+        Boolean failed = fail.equals("1");
+        Boolean averageTime = average.equals("1");
+        return new BuildDurationLogic(intreval, failed,job.getBuilds()).getBuildsDuration(averageTime);
     }
 
+    public Map<String, Double> getBuildSuccessRate(String period) throws ParseException {
+        Logger LOGGER = Logger.getLogger("uuu1");
+        LOGGER.log(Level.INFO, "arg jelly period success: " + period);
+        IntervalDate intreval = IntervalDate.valueOf(period);
+        return new BuildSuccessRateLogic(intreval, job.getBuilds()).getSuccessRate();
+    }
+
+    public Map<String, Double> getBuildArtifactSize(String period, String fail, String average) throws ParseException {
+        Logger LOGGER = Logger.getLogger("artifact");
+        LOGGER.log(Level.INFO, "arg jelly artifact: " + period);
+        LOGGER.log(Level.INFO, "failed artifact: " + fail);
+        LOGGER.log(Level.INFO, "avg artifact: " + average);
+        IntervalDate intreval = IntervalDate.valueOf(period);
+        Boolean failed = fail.equals("1");
+        Boolean averageTime = average.equals("1");
+        return new BuildArtifactSizeLogic(intreval, failed, job.getBuilds()).getArtifactSize(averageTime);
+    }
+
+    public Map<String, Integer> getBuildTestCount(String period, String fail) throws ParseException {
+        Logger LOGGER = Logger.getLogger("TestCount");
+        LOGGER.log(Level.INFO, "arg jelly TestCount: " + period);
+        LOGGER.log(Level.INFO, "failed TestCount: " + fail);
+        IntervalDate intreval = IntervalDate.valueOf(period);
+        Boolean failed = fail.equals("1");
+        return new BuildTestCountLogic(intreval, job.getBuilds()).getTestCount();
+    }
+
+    public Map<String, Double> getBuildTimeQueue(String period, String average) throws ParseException {
+        Logger LOGGER = Logger.getLogger("queue");
+        LOGGER.log(Level.INFO, "arg jelly queue: " + period);
+        LOGGER.log(Level.INFO, "avg queue: " + average);
+        IntervalDate intreval = IntervalDate.valueOf(period);
+        Boolean averageTime = average.equals("1");
+        return new BuildTimeQueueLogic(intreval, job.getBuilds()).getTimeQueue(averageTime);
+    }
+    // methods for js -> jelly -> java communication
+    @JavaScriptMethod
+    public int add(int x, int y) {
+        return x+y;
+    }
+
+        @JavaScriptMethod
+        public Map<String, Double> buildto(String job1) throws ParseException {
+            return new BuildDurationLogic(IntervalDate.YEAR, true, job.getBuilds()).getBuildsDuration(false);
+        }
+        public void doAction(StaplerRequest request, StaplerResponse response) throws IOException, ServletException,
+     ParseException {
+            IntervalDate intervalDate = IntervalDate.valueOf(request.getParameter("IntervalDate"));
+            BuildConfigurationStatisticsAction myPluginAction = new BuildConfigurationStatisticsAction(job);
+            myPluginAction.getBuildDuration("MONTH", "1", "0");
+            response.sendRedirect2(request.getContextPath() + "/jenkins");
+        }
+    @JavaScriptMethod
+    @RequirePOST
+    public void mark(String job) {
+        Logger LOGGER = Logger.getLogger("uuu2");
+        LOGGER.log(Level.WARNING, "js test");
+    }
+
+    @StaplerDispatchable
+    public void doMark(StaplerRequest req, StaplerResponse res) throws IOException {
+        Logger LOGGER = Logger.getLogger("uuu3");
+        LOGGER.log(Level.WARNING, "js stepler");
+    }
 }
+
 \end{lstlisting}
 
 \begin{lstlisting}[language=Java]
@@ -75,92 +158,1017 @@ public class BuildConfigurationStatisticsFactory extends TransientActionFactory<
 \begin{lstlisting}[language=Java]
 package io.jenkins.plugins.sample;
 
+import hudson.model.AbstractBuild;
 import hudson.model.Run;
+import hudson.model.Queue;
 import hudson.util.RunList;
+import jenkins.model.Jenkins;
 
+import java.io.IOException;
 import java.text.ParseException;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.*;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import java.util.concurrent.TimeUnit;
+import hudson.model.AbstractBuild;
 
-public class BuildDurationLogic {
+public class BuildDurationLogic extends BuildLogic {
+    static Logger LOGGER = Logger.getLogger(BuildDurationLogic.class.getName());
+    HashMap<String, Double> dateFormatDuration;
+    String dateFormatKey;
 
-    String period;
-    RunList<Run> buildList;
-    public BuildDurationLogic(String period, RunList<Run> buildList) {
-        this.period = period;
-        this.buildList = buildList;
+    public BuildDurationLogic(IntervalDate period, Boolean failed, RunList<Run> buildList) {
+        super(period, failed, buildList);
     }
 
-    public void filterPeriodBuild(){
-        if (period == "month") {
-            this.buildList = buildList
-                    .filter(run -> {
-                        try {
-                            return run.getStartTimeInMillis() >= DateTimeHandler.convertDateToLongTime("2023 11 01 00:00:00");
-                        } catch (ParseException e) {
-                            throw new RuntimeException(e);
-                        }
-                    });
-        }
-    }
-
-    public Map<Integer, Double> getBuildsDuration() throws ParseException {
+    public Map<String, Double> getBuildsDuration(Boolean average) throws ParseException {
         filterPeriodBuild();
-        Map<Integer, Double> dayDuration = new HashMap<Integer, Double>();
+        filterFailedBuild();
+        switch (this.period){
+            case MONTH:
+                dateFormatDuration = DateTimeHandler.createDateMonthMap();
+                dateFormatKey = "yyyy-MM-dd";
+                break;
+            case WEEK:
+                dateFormatDuration = DateTimeHandler.createDateWeekMap();
+                dateFormatKey = "yyyy-MM-dd";
+                break;
+            case YEAR:
+                dateFormatDuration = DateTimeHandler.createDateYearMap();
+                dateFormatKey = "yyyy-MM";
+                break;
+            case QUARTER:
+                dateFormatDuration = DateTimeHandler.createDateQuarterMap();
+                dateFormatKey = "yyyy-MM";
+                break;
+            case DAY:
+                dateFormatDuration = DateTimeHandler.createDateDayMap();
+                dateFormatKey = "yyyy-MM-dd HH";
+                break;
+            case ALL:
+                dateFormatDuration = DateTimeHandler.createDateYearMap();
+                dateFormatKey = "yyyy-MM";
+                break;
+        }
+
+
+        HashMap<String, Integer> dayDurationAverage = new HashMap<>();
         for (Run run : this.buildList) {
-            int day = DateTimeHandler.getDayOfMonth(DateTimeHandler.convertLongTimeToDate(run.getStartTimeInMillis()));
-            if (dayDuration.containsKey(day)){
-                dayDuration.put(day,dayDuration.get(day) + run.getDuration()/1000.0);
+            String dateFormatKeyAfterCheckPeriod =
+                    DateTimeHandler.dateToString(
+                            DateTimeHandler.convertLongTimeToDate(
+                                    run.getStartTimeInMillis()
+                            ), dateFormatKey
+                    );
+            LOGGER.log(Level.INFO, "dateFormatKeyAfterCheckPeriod: " + dateFormatKeyAfterCheckPeriod);
+            if (dateFormatDuration.get(dateFormatKeyAfterCheckPeriod) == 0.0) {
+                dateFormatDuration.put(dateFormatKeyAfterCheckPeriod, run.getDuration() / 1000.0);
+                LOGGER.log(Level.WARNING, "getDuration: " + run.getDuration());
+                dayDurationAverage.put(dateFormatKeyAfterCheckPeriod, 1);
             } else {
-                dayDuration.put(day,run.getDuration()/1000.0);
+                dateFormatDuration.put(dateFormatKeyAfterCheckPeriod, dateFormatDuration.get(dateFormatKeyAfterCheckPeriod) + run.getDuration() / 1000.0);
+                dayDurationAverage.put(dateFormatKeyAfterCheckPeriod, dayDurationAverage.get(dateFormatKeyAfterCheckPeriod) + 1);
             }
         }
-        return dayDuration;
+        if (average) {
+            for (Map.Entry<String, Integer> entry : dayDurationAverage.entrySet()) {
+                LOGGER.log(Level.INFO, "sum time duration: " + dateFormatDuration.get(entry.getKey()));
+                LOGGER.log(Level.INFO, "count runs: " + entry.getValue());
+                dateFormatDuration.put(entry.getKey(),
+                        dateFormatDuration.get(entry.getKey())/entry.getValue()
+                );
+            }
+        }
+        LOGGER.log(Level.INFO, "dateFormatDuration: " + dateFormatDuration);
+        LOGGER.log(Level.INFO, "dayDurationAverage: " + dayDurationAverage);
+        return dateFormatDuration;
     }
 }
+
+
+
 \end{lstlisting}
 
 \begin{lstlisting}[language=Java]
 package io.jenkins.plugins.sample;
 
-import java.text.Format;
+import java.text.DateFormat;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
+import java.time.ZonedDateTime;
 import java.util.Calendar;
 import java.util.Date;
+import java.util.HashMap;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public class DateTimeHandler {
-    public static String convertLongTimeToDate(long time){
+
+    static Logger LOGGER = Logger.getLogger(DateTimeHandler.class.getName());
+
+    public static Date convertLongTimeToDate(long time) {
         Date date = new Date(time);
-        Format format = new SimpleDateFormat("yyyy MM dd HH:mm:ss");
-        return format.format(date);
+        return date;
     }
     /*
-    * date format = yyyy MM dd HH:mm:ss
-    *
-    * */
-    public static long convertDateToLongTime(String date) throws ParseException {
-        SimpleDateFormat formatter = new SimpleDateFormat("yyyy MM dd HH:mm:ss");
-        return formatter.parse(date).getTime();
+     * date format = yyyy MM dd HH:mm:ss
+     *
+     * */
+    public static long convertDateToLongTime(Date date) throws ParseException {
+        return date.getTime();
     }
 
-
-    public static int getDayOfMonth(String aDate) throws ParseException {
-        SimpleDateFormat formatter = new SimpleDateFormat("yyyy MM dd HH:mm:ss");
+    public static int getDayOfMonth(Date aDate) throws ParseException {
         Calendar cal = Calendar.getInstance();
-        cal.setTime(formatter.parse(aDate));
+        cal.setTime(aDate);
         return cal.get(Calendar.DAY_OF_MONTH);
     }
+
+    public static int getCurrentMonthDays() {
+        Calendar c = Calendar.getInstance();
+        return c.getActualMaximum(Calendar.DAY_OF_MONTH);
+    }
+
+    public static int getLastMonthDays() {
+        Calendar c = Calendar.getInstance();
+        c.add(Calendar.MONTH, -1);
+        return c.getActualMaximum(Calendar.DAY_OF_MONTH);
+    }
+
+//    public static int getLastMonths() {
+//        Calendar c = Calendar.getInstance();
+//        c.add(Calendar.MONTH, -1);
+//        return c.getActualMaximum(Calendar.DAY_OF_MONTH);
+//    }
+
+    public static String dateToString(Date date, String format) {
+        DateFormat dateFormat = new SimpleDateFormat(format);
+        String strDate = dateFormat.format(date);
+        return strDate;
+    }
+
+    public static String dateMonthToString(Date date) {
+        DateFormat dateFormat = new SimpleDateFormat("yyyy-MM");
+        String strDate = dateFormat.format(date);
+        return strDate;
+    }
+
+    /**
+     * Create map format {23.12: 0.0, 24.12: 0.0 ...}
+     * on 30-31 days
+     *
+     * **/
+    public static HashMap<String, Double> createDateMonthMap() {
+        ZonedDateTime dateTime = ZonedDateTime.now().minusMonths(1);
+        Logger LOGGER;
+        LOGGER = Logger.getLogger(DateTimeHandler.class.getName());
+        LOGGER.log(Level.INFO, "dateTime" + dateTime);
+        HashMap<String, Double> dayDuration = new HashMap<String, Double>();
+        int lenMonth = getLastMonthDays();
+        LOGGER.log(Level.INFO, "lenMonth: " + lenMonth);
+        for (int i = 1; i <= lenMonth; i++) {
+
+            DateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd");
+            String strDate = dateFormat.format(
+                    Date.from(dateTime.plusDays(i).toInstant()).getTime());
+            LOGGER.log(Level.INFO, "strdate i: " + i + " - " + strDate);
+            dayDuration.put(strDate, 0.0);
+        }
+        LOGGER.log(Level.INFO, "dayDuration: " + dayDuration.entrySet());
+        return dayDuration;
+    }
+
+    /**
+     * Create map format {1:00:00 0.0, 2:00:00: 0.0 ...}
+     * on 24 hours
+     *
+     * **/
+    public static HashMap<String, Double> createDateDayMap() {
+        ZonedDateTime dateTime = ZonedDateTime.now().minusHours(24);
+        Logger LOGGER;
+        LOGGER = Logger.getLogger(DateTimeHandler.class.getName());
+        LOGGER.log(Level.INFO, "dateTime days" + dateTime);
+        HashMap<String, Double> hourDuration = new HashMap<String, Double>();
+        int lenDay = 24;
+        LOGGER.log(Level.INFO, "lenDay: " + lenDay);
+        for (int i = 1; i <= lenDay; i++) {
+
+            DateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd HH");
+            String strDate = dateFormat.format(
+                    Date.from(dateTime.plusHours(i).toInstant()).getTime());
+            LOGGER.log(Level.INFO, "strdate i: " + i + " - " + strDate);
+            hourDuration.put(strDate, 0.0);
+        }
+        LOGGER.log(Level.INFO, "hourDuration: " + hourDuration.entrySet());
+        return hourDuration;
+    }
+
+    public static HashMap<String, HashMap<String,Integer>> createDateWeekMapSuccessRate() {
+        ZonedDateTime dateTime = ZonedDateTime.now().minusWeeks(1);
+        LOGGER.log(Level.INFO, "dateTime - 1 week" + dateTime);
+        HashMap<String, HashMap<String,Integer>> successFailSuccess = new HashMap();
+        int lenWeek = 7;
+        LOGGER.log(Level.INFO, "lenWeek" + lenWeek);
+        for (int i = 1; i <= lenWeek; i++) {
+
+            DateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd");
+            //get dateTime previous week + i = 1...7 day and getTime, after in strDate=2022-03-22
+            String strDate = dateFormat.format(
+                    Date.from(dateTime.plusDays(i).toInstant()).getTime());
+            LOGGER.log(Level.INFO, "strdate i: " + i + " - " + strDate);
+            successFailSuccess.put(strDate, new HashMap(){{
+                put("fail", 0);
+                put("success", 0);
+            }});
+        }
+        LOGGER.log(Level.INFO, "successFailSuccess: " + successFailSuccess.entrySet());
+        return successFailSuccess;
+    }
+    /**
+     * Create map format {23.12: {success: 0, fail : 0}, 24.12: {success: 0, fail : 0} ...}
+     * on 30-31 days
+     *
+     * **/
+
+    public static HashMap<String, HashMap<String,Integer>> createDateMonthMapSuccessRate() {
+        ZonedDateTime dateTime = ZonedDateTime.now().minusMonths(1);
+        LOGGER.log(Level.INFO, "dateTime" + dateTime);
+        HashMap<String, HashMap<String,Integer>> successFailSuccess = new HashMap();
+        int lenMonth = getLastMonthDays();
+        LOGGER.log(Level.INFO, "lenMonth: " + lenMonth);
+        for (int i = 1; i <= lenMonth; i++) {
+
+            DateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd");
+            //get dateTime previous month + i = 1...31 day and getTime, after in strDate=2022-03-22
+            String strDate = dateFormat.format(
+                    Date.from(dateTime.plusDays(i).toInstant()).getTime());
+            LOGGER.log(Level.INFO, "strdate i: " + i + " - " + strDate);
+            successFailSuccess.put(strDate, new HashMap(){{
+                put("fail", 0);
+                put("success", 0);
+            }});
+        }
+        LOGGER.log(Level.INFO, "successFailSuccess: " + successFailSuccess.entrySet());
+        return successFailSuccess;
+    }
+
+    /**
+     * Create map format {23.12: 0, 24.12: 0 ...}
+     * on 30-31 days
+     *
+     * **/
+
+    public static HashMap<String, Integer> createDateMonthMapTestCount() {
+        ZonedDateTime dateTime = ZonedDateTime.now().minusMonths(1);
+        LOGGER.log(Level.INFO, "dateTime test count" + dateTime);
+        HashMap<String, Integer> testCount = new HashMap();
+        int lenMonth = getLastMonthDays();
+        LOGGER.log(Level.INFO, "lenMonth: " + lenMonth);
+        for (int i = 1; i <= lenMonth; i++) {
+
+            DateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd");
+            //get dateTime previous month + i = 1...31 day and getTime, after in strDate=2022-03-22
+            String strDate = dateFormat.format(
+                    Date.from(dateTime.plusDays(i).toInstant()).getTime());
+            LOGGER.log(Level.INFO, "strdate i: " + i + " - " + strDate);
+            testCount.put(strDate, 0);
+        }
+        LOGGER.log(Level.INFO, "testCount: " + testCount.entrySet());
+        return testCount;
+    }
+
+    /**
+     * Create map format {2/2022: 0.0, 3/2022: 0.0 ...}
+     * on 12 month
+     *
+     * **/
+    public static HashMap<String, Double> createDateYearMap() {
+        ZonedDateTime dateTime = ZonedDateTime.now().minusYears(1);
+        LOGGER.log(Level.INFO, "last year dateTime" + dateTime);
+        HashMap<String, Double> monthDuration = new HashMap<String, Double>();
+        int lengthYear = 12; // any year length in month
+        LOGGER.log(Level.INFO, "lengthYear: " + lengthYear);
+        for (int i = 1; i <= lengthYear; i++) {
+
+            DateFormat dateFormat = new SimpleDateFormat("yyyy-MM");
+
+            //get dateTime previous year + i = 1...12 and getTime, after in strDate=2022-03
+            String strDate = dateFormat.format(
+                    Date.from(
+                            dateTime.plusMonths(i).toInstant()
+                    ).getTime()
+            );
+
+            LOGGER.log(Level.INFO, "strdate i: " + i + " - " + strDate);
+            monthDuration.put(strDate, 0.0);
+        }
+        LOGGER.log(Level.INFO, "monthDuration: " + monthDuration.entrySet());
+        return monthDuration;
+    }
+
+    /**
+     * Create map format {2/2022: 0.0, 3/2022: 0.0 ...}
+     * on 3 month
+     *
+     * **/
+    public static HashMap<String, Double> createDateQuarterMap() {
+        ZonedDateTime dateTime = ZonedDateTime.now().minusMonths(3);
+        LOGGER.log(Level.INFO, "last quarter dateTime" + dateTime);
+        HashMap<String, Double> quarterDuration = new HashMap<String, Double>();
+        int lengthQuarter = 4; // any year length in month
+        LOGGER.log(Level.INFO, "lengthQuarter: " + lengthQuarter);
+        for (int i = 1; i <= lengthQuarter; i++) {
+
+            DateFormat dateFormat = new SimpleDateFormat("yyyy-MM");
+
+            //get dateTime previous year + i = 1...3 and getTime, after in strDate=2022-03
+            String strDate = dateFormat.format(
+                    Date.from(
+                            dateTime.plusMonths(i).toInstant()
+                    ).getTime()
+            );
+
+            LOGGER.log(Level.INFO, "strdate i: " + i + " - " + strDate);
+            quarterDuration.put(strDate, 0.0);
+        }
+        LOGGER.log(Level.INFO, "quarterDuration: " + quarterDuration.entrySet());
+        return quarterDuration;
+    }
+
+    /**
+     * Create map format {1/2/2022: 0.0, 3/2/2022: 0.0 ...}
+     * on 1 week
+     *
+     * **/
+    public static HashMap<String, Double> createDateWeekMap() {
+        ZonedDateTime dateTime = ZonedDateTime.now().minusWeeks(1);
+        LOGGER.log(Level.INFO, "last week dateTime duration" + dateTime);
+        HashMap<String, Double> weekDuration = new HashMap<String, Double>();
+        int lengthWeek = 7; // any week length in days
+        LOGGER.log(Level.INFO, "lengthWeek: " + lengthWeek);
+        for (int i = 1; i <= lengthWeek; i++) {
+
+            DateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd");
+
+            //get dateTime previous week + i = 1...7 and getTime, after in strDate=2022-03-01
+            String strDate = dateFormat.format(
+                    Date.from(
+                            dateTime.plusDays(i).toInstant()
+                    ).getTime()
+            );
+
+            LOGGER.log(Level.INFO, "strdate i: " + i + " - " + strDate);
+            weekDuration.put(strDate, 0.0);
+        }
+        LOGGER.log(Level.INFO, "weekDuration: " + weekDuration.entrySet());
+        return weekDuration;
+    }
+
+    public static HashMap<String, HashMap<String,Integer>> createDateYearMapSuccessRate() {
+        ZonedDateTime dateTime = ZonedDateTime.now().minusYears(1);
+        LOGGER.log(Level.INFO, "last year dateTime success" + dateTime);
+        HashMap<String, HashMap<String,Integer>> successFailSuccess = new HashMap();
+        int lenMonth = 12;
+        LOGGER.log(Level.INFO, "lenMonth: " + lenMonth);
+        for (int i = 1; i <= lenMonth; i++) {
+
+            DateFormat dateFormat = new SimpleDateFormat("yyyy-MM");
+            //get dateTime previous year + i = 1...12 and getTime, after in strDate=2022-03
+            String strDate = dateFormat.format(
+                    Date.from(dateTime.plusMonths(i).toInstant()).getTime());
+            LOGGER.log(Level.INFO, "strdate i: " + i + " - " + strDate);
+            successFailSuccess.put(strDate, new HashMap(){{
+                put("fail", 0);
+                put("success", 0);
+            }});
+        }
+        LOGGER.log(Level.INFO, "successFailSuccess: " + successFailSuccess.entrySet());
+        return successFailSuccess;
+    }
 }
+
+
+
 \end{lstlisting}
 
+Код BuildLogic.java:
+
 \begin{lstlisting}
+
+package io.jenkins.plugins.sample;
+
+import hudson.model.Result;
+import hudson.model.Run;
+import hudson.util.RunList;
+import java.text.ParseException;
+import java.time.ZonedDateTime;
+import java.util.Date;
+
+public class BuildLogic {
+    IntervalDate period;
+    RunList<Run> buildList;
+
+    Boolean failed;
+
+    public BuildLogic(IntervalDate period, Boolean failed, RunList<Run> buildList) {
+        this.period = period;
+        this.buildList = buildList;
+        this.failed = failed;
+    }
+
+    public void filterPeriodBuild() {
+        switch (period) {
+            case MONTH:
+                Date dateMonth = Date.from(ZonedDateTime.now().minusMonths(1).toInstant());
+                this.buildList = buildList.filter(run -> {
+                    try {
+                        return run.getStartTimeInMillis() >= DateTimeHandler.convertDateToLongTime(dateMonth);
+                    } catch (ParseException e) {
+                        throw new RuntimeException(e);
+                    }
+                });
+                break;
+            case YEAR:
+                Date dateYear = Date.from(ZonedDateTime.now().minusYears(1).toInstant());
+                this.buildList = buildList.filter(run -> {
+                    try {
+                        return run.getStartTimeInMillis() >= DateTimeHandler.convertDateToLongTime(dateYear);
+                    } catch (ParseException e) {
+                        throw new RuntimeException(e);
+                    }
+                });
+                break;
+            case DAY:
+                Date dateDay = Date.from(ZonedDateTime.now().minusHours(24).toInstant());
+                this.buildList = buildList.filter(run -> {
+                    try {
+                        return run.getStartTimeInMillis() >= DateTimeHandler.convertDateToLongTime(dateDay);
+                    } catch (ParseException e) {
+                        throw new RuntimeException(e);
+                    }
+                });
+                break;
+            case WEEK:
+                Date dateWeek = Date.from(ZonedDateTime.now().minusWeeks(1).toInstant());
+                this.buildList = buildList.filter(run -> {
+                    try {
+                        return run.getStartTimeInMillis() >= DateTimeHandler.convertDateToLongTime(dateWeek);
+                    } catch (ParseException e) {
+                        throw new RuntimeException(e);
+                    }
+                });
+                break;
+            case QUARTER:
+                Date dateQuarter = Date.from(ZonedDateTime.now().minusMonths(3).toInstant());
+                this.buildList = buildList.filter(run -> {
+                    try {
+                        return run.getStartTimeInMillis() >= DateTimeHandler.convertDateToLongTime(dateQuarter);
+                    } catch (ParseException e) {
+                        throw new RuntimeException(e);
+                    }
+                });
+                break;
+            case ALL:
+                break;
+        }
+    }
+
+    public void filterFailedBuild() {
+        if (!failed) {
+            this.buildList = buildList.filter(run -> {
+                return run.getResult().isBetterOrEqualTo(Result.SUCCESS);
+            });
+        }
+    }
+}
+
+
+\end{lstlisting}
+
+Код BuildArtifactSizeLogic.java:
+
+\begin{lstlisting}
+
+package io.jenkins.plugins.sample;
+
+import hudson.model.Run;
+import hudson.util.RunList;
+import java.text.ParseException;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+public class BuildArtifactSizeLogic extends BuildLogic {
+
+    static Logger LOGGER = Logger.getLogger(BuildDurationLogic.class.getName());
+    HashMap<String, Double> dateFormatArtifact;
+    String dateFormatKey;
+    public BuildArtifactSizeLogic(IntervalDate period, Boolean failed, RunList<Run> buildList) {
+        super(period, failed,buildList);
+    }
+
+    public Map<String, Double> getArtifactSize(Boolean average) throws ParseException {
+        filterPeriodBuild();
+        filterFailedBuild();
+        switch (this.period){
+            case MONTH:
+                dateFormatArtifact = DateTimeHandler.createDateMonthMap();
+                dateFormatKey = "yyyy-MM-dd";
+                break;
+            case WEEK:
+                dateFormatArtifact = DateTimeHandler.createDateWeekMap();
+                dateFormatKey = "yyyy-MM-dd";
+                break;
+            case YEAR:
+                dateFormatArtifact = DateTimeHandler.createDateYearMap();
+                dateFormatKey = "yyyy-MM";
+                break;
+        }
+
+
+        HashMap<String, Integer> dayArtifactAverage = new HashMap<>();
+        for (Run run : this.buildList) {
+            String dateFormatKeyAfterCheckPeriod =
+                    DateTimeHandler.dateToString(
+                            DateTimeHandler.convertLongTimeToDate(
+                                    run.getStartTimeInMillis()
+                            ), dateFormatKey
+                    );
+            LOGGER.log(Level.INFO, "dateFormatKeyAfterCheckPeriod artifact: " + dateFormatKeyAfterCheckPeriod);
+            LOGGER.log(Level.WARNING, "getArtifacts: " + run.getArtifacts());
+            List<Run.Artifact> listArtifacts = run.getArtifacts();
+            double artifactsRunSize = 0;
+
+            for (Run.Artifact artifact : listArtifacts) {
+                artifactsRunSize += artifact.getFileSize()/1024.0;
+                LOGGER.log(Level.WARNING, "artifact.getFileSize(): " +artifact.getFileSize());
+            }
+
+            LOGGER.log(Level.WARNING, "artifactsRunSize: " + artifactsRunSize);
+
+            if (dateFormatArtifact.get(dateFormatKeyAfterCheckPeriod) == 0.0) {
+                dateFormatArtifact.put(dateFormatKeyAfterCheckPeriod, artifactsRunSize);
+                dayArtifactAverage.put(dateFormatKeyAfterCheckPeriod, 1);
+            } else {
+                dateFormatArtifact.put(dateFormatKeyAfterCheckPeriod, dateFormatArtifact.get(dateFormatKeyAfterCheckPeriod) + artifactsRunSize);
+                dayArtifactAverage.put(dateFormatKeyAfterCheckPeriod, dayArtifactAverage.get(dateFormatKeyAfterCheckPeriod) + 1);
+            }
+        }
+        if (average) {
+            for (Map.Entry<String, Integer> entry : dayArtifactAverage.entrySet()) {
+                LOGGER.log(Level.INFO, "sum time duration: " + dateFormatArtifact.get(entry.getKey()));
+                LOGGER.log(Level.INFO, "count runs: " + entry.getValue());
+                dateFormatArtifact.put(entry.getKey(),
+                        dateFormatArtifact.get(entry.getKey())/entry.getValue()
+                );
+            }
+        }
+        LOGGER.log(Level.INFO, "dateFormatArtifact: " + dateFormatArtifact);
+        LOGGER.log(Level.INFO, "dayArtifactAverage: " + dayArtifactAverage);
+        return dateFormatArtifact;
+    }
+}
+
+
+\end{lstlisting}
+
+Код BuildSuccessRateLogic.java:
+
+\begin{lstlisting}
+package io.jenkins.plugins.sample;
+
+import hudson.model.Result;
+import hudson.model.Run;
+import hudson.util.RunList;
+import java.text.ParseException;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+public class BuildSuccessRateLogic extends BuildLogic {
+
+    static Logger LOGGER = Logger.getLogger(BuildSuccessRateLogic.class.getName());
+    HashMap<String, HashMap<String,Integer>> successRateOnFormatDate;
+    String dateFormatKey;
+
+    public BuildSuccessRateLogic(IntervalDate period, RunList<Run> buildList) {
+        super(period,false, buildList);
+    }
+
+//    public Map<String, Double> getSuccessRate() throws ParseException {
+//        filterPeriodBuild();
+//        Map<String, Double> successRate = new HashMap<String, Double>();
+//        for (Run run : this.buildList) {
+//            String day ="kjk";
+//                    //DateTimeHandler.dateToString(DateTimeHandler.convertLongTimeToDate(run.getStartTimeInMillis()));
+//            if (successRate.containsKey(day)) {
+//                successRate.put(day, successRate.get(day) + run.getDuration() / 1000.0);
+//            } else {
+//                successRate.put(day, run.getDuration() / 1000.0);
+//            }
+//        }
+//        return successRate;
+//    }
+
+    public Map<String, Double> getSuccessRate() throws ParseException {
+        filterPeriodBuild();
+        switch (this.period){
+            case MONTH:
+                successRateOnFormatDate = DateTimeHandler.createDateMonthMapSuccessRate();
+                dateFormatKey = "yyyy-MM-dd";
+                break;
+            case WEEK:
+                successRateOnFormatDate = DateTimeHandler.createDateWeekMapSuccessRate();
+                dateFormatKey = "yyyy-MM-dd";
+                break;
+            case YEAR:
+                successRateOnFormatDate = DateTimeHandler.createDateYearMapSuccessRate();
+                dateFormatKey = "yyyy-MM";
+                break;
+        }
+
+        for (Run run : this.buildList) {
+            String dateFormatKeyAfterCheckPeriod =
+                    DateTimeHandler.dateToString(
+                            DateTimeHandler.convertLongTimeToDate(
+                                    run.getStartTimeInMillis()
+                            ), dateFormatKey
+                    );
+            LOGGER.log(Level.INFO, "dateFormatKeyAfterCheckPeriod: " + dateFormatKeyAfterCheckPeriod);
+            if (run.getResult().isBetterOrEqualTo(Result.SUCCESS)){
+                successRateOnFormatDate.get(dateFormatKeyAfterCheckPeriod).put("success", (successRateOnFormatDate.get(dateFormatKeyAfterCheckPeriod).get("success")) + 1);
+            } else {
+                successRateOnFormatDate.get(dateFormatKeyAfterCheckPeriod).put("fail", (successRateOnFormatDate.get(dateFormatKeyAfterCheckPeriod).get("fail")) + 1);
+            }
+            LOGGER.log(Level.INFO, "successRateOnFormatDate: " + successRateOnFormatDate);
+
+//            if (successRateOnFormatDate.get(dateFormatKeyAfterCheckPeriod).get("fail") == 0.0) {
+//                successRateOnFormatDate.put(dateFormatKeyAfterCheckPeriod,
+//                        //(run.getResult().isBetterOrEqualTo(Result.SUCCESS)) ? );
+//
+//            } else {
+//                successRateOnFormatDate.put(dateFormatKeyAfterCheckPeriod, successRateOnFormatDate.get(dateFormatKeyAfterCheckPeriod) + run.getDuration() / 1000.0);
+//            }
+        }
+        HashMap<String, Double> successRateMap = new HashMap<String, Double>();
+        for (Map.Entry<String, HashMap<String, Integer>> entry : successRateOnFormatDate.entrySet()) {
+                LOGGER.log(Level.INFO, "succes value on date: " + entry.getValue());
+                LOGGER.log(Level.INFO, "key success rate: " + entry.getKey());
+                if ((entry.getValue().get("success")+entry.getValue().get("fail")) == 0) {
+                    successRateMap.put(entry.getKey(), 0.0);
+                } else {
+                    successRateMap.put(entry.getKey(),
+                            Double.valueOf(entry.getValue().get("success"))/(entry.getValue().get("success")+entry.getValue().get("fail"))
+                    );
+                }
+        }
+        LOGGER.log(Level.INFO, "successRateMap: " + successRateMap);
+
+        return successRateMap;
+    }
+}
+
+\end{lstlisting}
+
+Код BuildTestCountLogic.java:
+
+\begin{lstlisting}
+package io.jenkins.plugins.sample;
+
+import hudson.model.AbstractProject;
+import hudson.model.Result;
+import hudson.model.Run;
+import hudson.util.RunList;
+import java.text.ParseException;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+public class BuildTestCountLogic extends BuildLogic {
+
+    static Logger LOGGER = Logger.getLogger(BuildTestCountLogic.class.getName());
+    HashMap<String, Integer> testCountOnFormatDate;
+    String dateFormatKey;
+
+    public BuildTestCountLogic(IntervalDate period, RunList<Run> buildList) {
+        super(period, true, buildList);
+    }
+
+    public Map<String, Integer> getTestCount() throws ParseException {
+        filterPeriodBuild();
+        filterPeriodBuild();
+        switch (this.period) {
+            case MONTH:
+                testCountOnFormatDate = DateTimeHandler.createDateMonthMapTestCount();
+                dateFormatKey = "yyyy-MM-dd";
+                break;
+            case WEEK:
+                testCountOnFormatDate = DateTimeHandler.createDateMonthMapTestCount();
+                dateFormatKey = "yyyy-MM-dd";
+                break;
+            case YEAR:
+                testCountOnFormatDate = DateTimeHandler.createDateMonthMapTestCount();
+                dateFormatKey = "yyyy-MM";
+                break;
+        }
+
+        for (Run run : this.buildList) {
+            String dateFormatKeyAfterCheckPeriod =
+                    DateTimeHandler.dateToString(
+                            DateTimeHandler.convertLongTimeToDate(
+                                    run.getStartTimeInMillis()
+                            ), dateFormatKey
+                    );
+            LOGGER.log(Level.INFO, "dateFormatKeyAfterCheckPeriod: " + dateFormatKeyAfterCheckPeriod);
+            if (testCountOnFormatDate.get(dateFormatKeyAfterCheckPeriod) == 0) {
+                testCountOnFormatDate.put(dateFormatKeyAfterCheckPeriod, getTestCountForRun(run));
+            } else {
+                testCountOnFormatDate.put(dateFormatKeyAfterCheckPeriod, testCountOnFormatDate.get(dateFormatKeyAfterCheckPeriod) + getTestCountForRun(run));
+            }
+            LOGGER.log(Level.INFO, "testCountOnFormatDate: " + testCountOnFormatDate);
+
+        }
+
+        LOGGER.log(Level.INFO, "testCountMap: " + testCountOnFormatDate);
+
+        return testCountOnFormatDate;
+    }
+
+
+    public int getTestCountForRun(Run run) {
+        int testCount = 0;
+//        Jenkins jenkinsInstance = Jenkins.getInstance();
+//        if (jenkinsInstance != null) {
+//            Job job = (Job) jenkinsInstance.getItem(jobName);
+//            if (job != null && job instanceof AbstractProject) {
+//                AbstractProject abstractProject = (AbstractProject) job;
+//                AbstractTestResultAction abstractTestResultAction = abstractProject.getLastCompletedBuild().getAction(AbstractTestResultAction.class);
+//                if (abstractTestResultAction != null) {
+//                    return abstractTestResultAction.getTotalCount();
+//                }
+//            }
+//        }
+        return testCount;
+    }
+}
+
+
+\end{lstlisting}
+
+Код BuildTimeQueueLogic.java:
+
+\begin{lstlisting}
+
+package io.jenkins.plugins.sample;
+
+import hudson.model.Run;
+import hudson.util.RunList;
+import java.text.ParseException;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+public class BuildTimeQueueLogic extends BuildLogic {
+    static Logger LOGGER = Logger.getLogger(BuildDurationLogic.class.getName());
+
+    HashMap<String, Double> dateFormatDuration;
+    String dateFormatKey;
+    public BuildTimeQueueLogic(IntervalDate period, RunList<Run> buildList) {
+        super(period, true, buildList);
+    }
+
+    public Map<String, Double> getTimeQueue(Boolean average) throws ParseException {
+        filterPeriodBuild();
+
+        switch (this.period){
+            case MONTH:
+                dateFormatDuration = DateTimeHandler.createDateMonthMap();
+                dateFormatKey = "yyyy-MM-dd";
+                break;
+            case WEEK:
+                dateFormatDuration = DateTimeHandler.createDateWeekMap();
+                dateFormatKey = "yyyy-MM-dd";
+                break;
+            case YEAR:
+                dateFormatDuration = DateTimeHandler.createDateYearMap();
+                dateFormatKey = "yyyy-MM";
+                break;
+        }
+
+
+        HashMap<String, Integer> dayDurationAverage = new HashMap<>();
+        for (Run run : this.buildList) {
+            String dateFormatKeyAfterCheckPeriod =
+                    DateTimeHandler.dateToString(
+                            DateTimeHandler.convertLongTimeToDate(
+                                    run.getStartTimeInMillis()
+                            ), dateFormatKey
+                    );
+            LOGGER.log(Level.INFO, "dateFormatKeyAfterCheckPeriod time Queue: " + dateFormatKeyAfterCheckPeriod);
+            long runTimeInQueue = new TimeInQueueFetcher().getTimeInQueue(run);
+            if (dateFormatDuration.get(dateFormatKeyAfterCheckPeriod) == 0.0) {
+
+                LOGGER.log(Level.WARNING, "getTimeInQueue long: " + runTimeInQueue);
+                dateFormatDuration.put(dateFormatKeyAfterCheckPeriod,  (double) runTimeInQueue);
+                LOGGER.log(Level.WARNING, "getTimeInQueue double: " + (double) runTimeInQueue);
+                dayDurationAverage.put(dateFormatKeyAfterCheckPeriod, 1);
+            } else {
+                dateFormatDuration.put(dateFormatKeyAfterCheckPeriod, dateFormatDuration.get(dateFormatKeyAfterCheckPeriod) + (double) runTimeInQueue);
+                dayDurationAverage.put(dateFormatKeyAfterCheckPeriod, dayDurationAverage.get(dateFormatKeyAfterCheckPeriod) + 1);
+            }
+        }
+        if (average) {
+            for (Map.Entry<String, Integer> entry : dayDurationAverage.entrySet()) {
+                LOGGER.log(Level.INFO, "sum time queue: " + dateFormatDuration.get(entry.getKey()));
+                LOGGER.log(Level.INFO, "count runs time queue: " + entry.getValue());
+                dateFormatDuration.put(entry.getKey(),
+                        dateFormatDuration.get(entry.getKey())/entry.getValue()
+                );
+            }
+        }
+        LOGGER.log(Level.INFO, "dateFormatDuration time queue: " + dateFormatDuration);
+        LOGGER.log(Level.INFO, "dayDurationAverage time queue: " + dayDurationAverage);
+        return dateFormatDuration;
+    }
+}
+
+
+
+
+\end{lstlisting}
+
+Код TimeInQueueFetcher.java:
+
+\begin{lstlisting}
+
+package io.jenkins.plugins.sample;
+
+import hudson.model.Run;
+
+import java.util.concurrent.TimeUnit;
+
+public class TimeInQueueFetcher {
+    public long getTimeInQueue(Run build) {
+        long queuedTime = build.getStartTimeInMillis() - build.getTimeInMillis();
+        return TimeUnit.MILLISECONDS.toMillis(queuedTime);
+    }
+}
+
+\end{lstlisting}
+
+Код dateIntervalEnum.java.java:
+
+\begin{lstlisting}
+package io.jenkins.plugins.sample;
+
+enum IntervalDate {
+    DAY,
+    WEEK,
+    MONTH,
+    YEAR,
+    QUARTER,
+    ALL
+}
+
+
+\end{lstlisting}
+
+Код js файла с парсингом данных и визуализацией:
+
+\begin{lstlisting}
+
+
+function formatLabelsDate(arrLabels, dateFormat, period) {
+switch(period) {
+    case 'WEEK':
+    case 'MONTH':
+                 arrLabels.push(
+                            dateFormat.getDate()+
+                                       "/"+(dateFormat.getMonth()+1)+
+                                       "/"+dateFormat.getFullYear()
+                       );
+    break;
+
+    case 'QUARTER':
+    case 'YEAR':
+                 arrLabels.push(
+(dateFormat.getMonth()+1)+"/"+dateFormat.getFullYear()
+                       );
+    break;
+
+}
+}
+
+
+
+function sortOnKeys(dict) {
+
+    var sorted = [];
+    for(var key in dict) {
+        sorted[sorted.length] = key;
+    }
+    sorted.sort();
+
+    var dataBuildDurationValues = [];
+    var labelsB = [];
+    for(var i = 0; i < sorted.length; i++) {
+       dataBuildDurationValues.push(dict[sorted[i]]);
+       var dateFormat= new Date(parseInt(sorted[i]));
+       console.log("dateFormat", dateFormat);
+       var period = document.querySelector(".period").textContent;
+       formatLabelsDate(labelsB, dateFormat, period);
+    }
+    return [dataBuildDurationValues, labelsB];
+}
+// build Duration create chart settings
+var buildDuration = document.querySelectorAll(".buildDuration");
+
+var dataBuildDurationValues = [];
+var dataBuildDurationDict = {};
+
+for (var i=0; i<buildDuration.length; i++){
+
+    dataBuildDurationDict[Date.parse(buildDuration[i].querySelector('.key').textContent)]
+        = parseFloat(buildDuration[i].querySelector('.value').textContent);
+
+}
+console.log("dataBuildDurationDict: ", dataBuildDurationDict);
+
+dict = sortOnKeys(dataBuildDurationDict)[0];
+labelsB = sortOnKeys(dataBuildDurationDict)[1];
+console.log("build duration dict values",dict);
+
+// build Duration create chart settings
+var successRate = document.querySelectorAll(".successRate");
+
+var dataSuccessRateValues = [];
+var dataSuccessRateDict = {};
+
+for (var i=0; i<successRate.length; i++){
+
+    dataSuccessRateDict[Date.parse(successRate[i].querySelector('.key').textContent)]
+        = parseFloat(successRate[i].querySelector('.value').textContent);
+
+}
+console.log("dataSuccessRateDict: ", dataSuccessRateDict);
+
+dictSuccess = sortOnKeys(dataSuccessRateDict)[0];
+labelsSuccess = sortOnKeys(dataSuccessRateDict)[1];
+console.log("success rate dict values",dictSuccess);
+
+
+// time Queue create chart settings
+var timeQueue = document.querySelectorAll(".timeQueue");
+
+var dataTimeQueueValues = [];
+var dataTimeQueueDict = {};
+
+for (var i=0; i<timeQueue.length; i++){
+
+    dataTimeQueueDict[Date.parse(timeQueue[i].querySelector('.key').textContent)]
+        = parseFloat(timeQueue[i].querySelector('.value').textContent);
+
+}
+console.log("dataTimeQueueDict: ", dataTimeQueueDict);
+
+dictTimeQueue = sortOnKeys(dataTimeQueueDict)[0];
+labelsTimeQueue = sortOnKeys(dataTimeQueueDict)[1];
+console.log("time spent queue dict values",dictTimeQueue);
+
+// artifact create chart settings
+var artifactSize = document.querySelectorAll(".artifactSize");
+
+var dataArtifactSizeValues = [];
+var dataArtifactSizeDict = {};
+
+for (var i=0; i<artifactSize.length; i++){
+
+    dataArtifactSizeDict[Date.parse(artifactSize[i].querySelector('.key').textContent)]
+        = parseFloat(artifactSize[i].querySelector('.value').textContent);
+
+}
+console.log("dataArtifactSizeDict: ", dataArtifactSizeDict);
+
+dictArtifactSize = sortOnKeys(dataArtifactSizeDict)[0];
+labelsArtifactSize = sortOnKeys(dataArtifactSizeDict)[1];
+console.log("artifact size dict values",dictArtifactSize);
+
+
+
+
 const labels = Array.from({length: 30}, (_, i) => i + 1);
+
 const data = {
-  labels: labels,
+  labels: labelsSuccess,
   datasets: [{
     label: 'Success rate',
-    data: Array.from({length: 30}, () => Math.floor(Math.random() * 100)),
+    data: dictSuccess,
     backgroundColor: [
       'rgba(0, 255, 0, 0.5)',
     ],
@@ -173,21 +1181,12 @@ const data = {
   }]
 };
 
-var buildDuration = document.querySelectorAll(".buildDuration");
-var dataBuildDurationValues = Array.from({length: 30}, () => 0);
-for (var i=0; i<buildDuration.length; i++){
-    console.log(buildDuration[i]);
-    dataBuildDurationValues.splice(parseInt(buildDuration[i].querySelector('.key').textContent, 10) - 1, 1, parseFloat(buildDuration[i].querySelector('.value').textContent));
-    console.log(dataBuildDurationValues[i]);
-}
-
-
 
 const dataBuildDuration = {
-  labels: labels,
+  labels: labelsB,
   datasets: [{
     label: 'Build duration',
-    data: dataBuildDurationValues,
+    data: dict,
     borderColor: [
       'rgba(0, 180, 33, 1)',
     ],
@@ -197,10 +1196,10 @@ const dataBuildDuration = {
 };
 
 const dataTimeSpentQueue = {
-  labels: labels,
+  labels: labelsB,
   datasets: [{
     label: 'Time Spent In Queue',
-    data: Array.from({length: 30}, () => Math.floor(Math.random() * 60)),
+    data: dictTimeQueue,
     borderColor: [
       'rgba(0, 180, 33, 1)',
     ],
@@ -221,10 +1220,10 @@ const dataTestCount = {
   }]
 };
 const dataArtifactsSize = {
-  labels: labels,
+  labels: labelsArtifactSize,
   datasets: [{
     label: 'Artifacts Size',
-    data: Array.from({length: 30}, () => Math.floor(Math.random() * 60)),
+    data: dictArtifactSize,
     borderColor: [
       'rgba(0, 180, 33, 1)',
     ],
@@ -283,14 +1282,23 @@ perfChartJsCharts["artifactsSize"] = new Chart(ctxArtifactsSize, settingsArtifac
 
 
 
+
+
+
+
+
 \end{lstlisting}
+
+Код jelly файла, со взаимодействием Java, JS и интерфейса
 
 \begin{lstlisting}
 <?jelly escape-by-default='true'?>
-<j:jelly xmlns:j="jelly:core" xmlns:l="/lib/layout" xmlns:st="jelly:stapler">
+<j:jelly xmlns:j="jelly:core" xmlns:l="/lib/layout" xmlns:st="jelly:stapler" xmlns:f="/lib/form">
         <head>
                 <style>
-                        .buildDuration{
+                        .buildDuration, .period,
+                        .successRate, .timeQueue,
+                        .artifactSize, .testCount{
                                 display:none;
                         }
                         .graph-container {
@@ -319,26 +1327,69 @@ perfChartJsCharts["artifactsSize"] = new Chart(ctxArtifactsSize, settingsArtifac
                         form label{
                         margin: 5px;
                         }
+
                 </style>
         </head>
 
-        <st:adjunct includes="io.jenkins.plugins.sample.BuildConfigurationStatisticsAction.declareChartJsClickArray"/>
+
         <l:layout title="Build Configuration Statistics">
+
                 <l:side-panel>
                         <st:include page="sidepanel.jelly" it="${it.job}" optional="true" />
                 </l:side-panel>
                 <l:main-panel>
+
                         <h1>Statistics for job ${it.job.name}</h1>
-                        <j:forEach var="type" items="${it.getBuildDuration()}">
+                        <div id="msg" />
+<!--                        <script>-->
+<!--                                var foo = <st:bind value="${it}"/>-->
+
+<!--                                foo.add(1,5, function(t) {-->
+<!--                                document.getElementById('msg').innerHTML = t.responseObject();-->
+<!--                                })-->
+<!--                        </script>-->
+
+<!--                        <td>-->
+<!--                                <f:checkbox name="selected" onclick="myItem.mark('${it.job.fullName}')" />-->
+<!--                        </td>-->
+
+                        <p class="period">WEEK</p>
+                        <j:forEach var="type" items="${it.getBuildDuration('WEEK', '1','1')}">
                                 <p class="buildDuration">
                                         <span class="key">${type.key}</span>
                                         <span class="value">${type.value}</span>
                                 </p>
                         </j:forEach>
+                        <j:forEach var="successRate" items="${it.getBuildSuccessRate('WEEK')}">
+                                <p class="successRate">
+                                        <span class="key">${successRate.key}</span>
+                                        <span class="value">${successRate.value}</span>
+                                </p>
+                        </j:forEach>
+                        <j:forEach var="timeQueue" items="${it.getBuildTimeQueue('WEEK', '1')}">
+                                <p class="timeQueue">
+                                        <span class="key">${timeQueue.key}</span>
+                                        <span class="value">${timeQueue.value}</span>
+                                </p>
+                        </j:forEach>
+                        <j:forEach var="artifactSize" items="${it.getBuildArtifactSize('WEEK', '1','1')}">
+                                <p class="artifactSize">
+                                        <span class="key">${artifactSize.key}</span>
+                                        <span class="value">${artifactSize.value}</span>
+                                </p>
+                        </j:forEach>
+                        <j:forEach var="testCount" items="${it.getBuildTestCount('WEEK', '1')}">
+                                <p class="testCount">
+                                        <span class="key">${testCount.key}</span>
+                                        <span class="value">${testCount.value}</span>
+                                </p>
+                        </j:forEach>
+
+
                         <div class="graph-container">
                         <div class="graph-block">
                                 <div class="canvas-container">
-                                <canvas id="successRateChart" width="90" height="15"></canvas>
+                                <canvas id="successRateChart" width="90" height="25"></canvas>
                                 </div>
                                 <form class="settings">
                                         <label>
@@ -347,6 +1398,9 @@ perfChartJsCharts["artifactsSize"] = new Chart(ctxArtifactsSize, settingsArtifac
                                                         <option>Month</option>
                                                         <option>Day</option>
                                                         <option>Year</option>
+                                                        <option>Week</option>
+                                                        <option>Quarter</option>
+                                                        <option>All</option>
                                                 </select>
 
                                         </label>
@@ -355,16 +1409,22 @@ perfChartJsCharts["artifactsSize"] = new Chart(ctxArtifactsSize, settingsArtifac
                         </div>
                         <div class="graph-block">
                                 <div class="canvas-container">
-                                <canvas id="buildDurationChart" width="90" height="15"></canvas>
+                                <canvas id="buildDurationChart" width="90" height="25"></canvas>
                                 </div>
                                 <form class="settings">
                                         <label>
                                                 Range:
+                                                <f:entry title="My Plugin Action">
                                                 <select>
                                                         <option>Month</option>
                                                         <option>Day</option>
                                                         <option>Year</option>
+                                                        <option>Week</option>
+                                                        <option>Quarter</option>
+                                                        <option>All</option>
                                                 </select>
+                                                </f:entry>
+
 
                                         </label>
                                         <label>
@@ -380,7 +1440,7 @@ perfChartJsCharts["artifactsSize"] = new Chart(ctxArtifactsSize, settingsArtifac
                         </div>
                         <div class="graph-block">
                                 <div class="canvas-container">
-                                <canvas id="timeSpentQueue" width="90" height="15"></canvas>
+                                <canvas id="timeSpentQueue" width="90" height="25"></canvas>
                                 </div>
                                 <form class="settings">
                                         <label>
@@ -389,6 +1449,9 @@ perfChartJsCharts["artifactsSize"] = new Chart(ctxArtifactsSize, settingsArtifac
                                                         <option>Month</option>
                                                         <option>Day</option>
                                                         <option>Year</option>
+                                                        <option>Week</option>
+                                                        <option>Quarter</option>
+                                                        <option>All</option>
                                                 </select>
 
                                         </label>
@@ -401,7 +1464,7 @@ perfChartJsCharts["artifactsSize"] = new Chart(ctxArtifactsSize, settingsArtifac
                         </div>
                         <div class="graph-block">
                                 <div class="canvas-container">
-                                <canvas id="testCount" width="90" height="15"></canvas>
+                                <canvas id="testCount" width="90" height="25"></canvas>
                                 </div>
                                 <form class="settings">
                                         <label>
@@ -410,6 +1473,9 @@ perfChartJsCharts["artifactsSize"] = new Chart(ctxArtifactsSize, settingsArtifac
                                                         <option>Month</option>
                                                         <option>Day</option>
                                                         <option>Year</option>
+                                                        <option>Week</option>
+                                                        <option>Quarter</option>
+                                                        <option>All</option>
                                                 </select>
 
                                         </label>
@@ -422,7 +1488,7 @@ perfChartJsCharts["artifactsSize"] = new Chart(ctxArtifactsSize, settingsArtifac
                         </div>
                         <div class="graph-block">
                                 <div class="canvas-container">
-                                <canvas id="artifactsSize" width="90" height="15"></canvas>
+                                <canvas id="artifactsSize" width="90" height="25"></canvas>
                                 </div>
                                 <form class="settings">
                                         <label>
@@ -431,6 +1497,9 @@ perfChartJsCharts["artifactsSize"] = new Chart(ctxArtifactsSize, settingsArtifac
                                                         <option>Month</option>
                                                         <option>Day</option>
                                                         <option>Year</option>
+                                                        <option>Week</option>
+                                                        <option>Quarter</option>
+                                                        <option>All</option>
                                                 </select>
 
                                         </label>
@@ -448,8 +1517,11 @@ perfChartJsCharts["artifactsSize"] = new Chart(ctxArtifactsSize, settingsArtifac
                         </div>
 
                 </l:main-panel>
+                <st:bind var="myItem" value="${it}"/>
         </l:layout>
+        <st:adjunct includes="io.jenkins.plugins.sample.BuildConfigurationStatisticsAction.declareChartJsClickArray"/>
         <st:adjunct includes="io.jenkins.plugins.sample.BuildConfigurationStatisticsAction.chartLogicBox"/>
 </j:jelly>
+
 \end{lstlisting}
 
