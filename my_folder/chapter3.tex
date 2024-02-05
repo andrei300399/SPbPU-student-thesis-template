@@ -25,6 +25,7 @@
 	\item String getBuildArtifactSize(String period, String fail, String statistics) - метод для получения информации о созданных артефактов запусков сборки, за определенный период, с заданными настройками;
 	\item String getBuildTestCount(String period, String fail) - метод для получения информации о количестве выполненных тестов при запуске сборки, за определенный период, с заданными настройками;
 	\item String getBuildTimeQueue(String period, String statistics) - метод для получения информации о времени нахождения в очереди запусков сборки, за определенный период, с заданными настройками.
+	\item double getPredicted(String period, String metric) - метод для прогнозирования метрик (BD, AS) следующей сборки.
 \end{itemize}
 
 \subsection{DateTimeHandler}
@@ -193,6 +194,18 @@
 \begin{itemize}
 	\item BuildTimeQueueLogic(IntervalDate period, RunList<Run> buildList) - конструктор класса;
 	\item Map<String, Double> getTimeQueue(Statistics statistics) - метод, в котором происходит фильтрация данных запусков сборок по периоду и флагу failed, определение формата дат и вычисление времени нахождения в очереди запусков сборок, а также расчет по статистической величине (например, среднее арифметическое), в зависимости от заданных настроек.
+\end{itemize}
+
+\subsection{LinearRegressionHandler}
+
+Класс для прогнозирования метрик следующей сборки с помощью линейной регрессии с весовыми коэффициентами. В классе определено одно поле Logger LOGGER, с помощью которого записываются логи плагина при выполнении методов класса.
+
+
+Также в классе определены методы:
+
+\begin{itemize}
+	\item double linearRegression(double[] yUnweighted, double[] weights) - метод для прогнозирования метрик следующей сборки на основе весовых коэффициентов и предыдущих значений метрики за период;
+	\item double[] calculateWeightMetric(double[] arrMetricValues) - метод расчета весовых коэффициентов, с учетом пустых значений, например, если за период не было запущено сборок.
 \end{itemize}
 
 \subsection{Файлы JS и Jelly}
