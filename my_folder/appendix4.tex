@@ -10,10 +10,13 @@ import hudson.model.Action;
 import hudson.model.Job;
 import org.kohsuke.stapler.bind.JavaScriptMethod;
 
+import java.text.DecimalFormat;
+import java.text.DecimalFormatSymbols;
 import java.text.ParseException;
-import java.util.Map;
+import java.util.*;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.stream.Collectors;
 
 
 public class BuildConfigurationStatisticsAction implements Action {
@@ -119,7 +122,78 @@ public class BuildConfigurationStatisticsAction implements Action {
         return gsonData;
 
     }
+
+    @JavaScriptMethod
+    public double getPredicted(String period, String metric) throws ParseException {
+        Logger LOGGER = Logger.getLogger("getPredicted");
+        LOGGER.log(Level.INFO, "getPredicted period: " + period);
+        IntervalDate intreval = IntervalDate.valueOf(period);
+        Map<String, Double> map;
+
+        if (metric.equals("BD")) {
+            map = new BuildDurationLogic(intreval, true,job.getBuilds()).getBuildsDuration(Statistics.AVG);
+        } else {
+            map = new BuildArtifactSizeLogic(intreval, true,job.getBuilds()).getArtifactSize(Statistics.AVG);
+        }
+
+
+        String formatDate;
+
+        Map<Long, Double> newMap = new HashMap<Long, Double>();
+        for(Map.Entry<String, Double> entry : map.entrySet()) {
+            //LOGGER.log(Level.INFO, "map entrySet: " + map.entrySet());
+            LOGGER.log(Level.INFO, "entrySet: " + entry.getKey() + " - " + entry.getValue());
+            LOGGER.log(Level.INFO, "string date zero: " + DateTimeHandler.dateSetZeroDay(entry.getKey()));
+            String parsedDate;
+            if (intreval == IntervalDate.YEAR || intreval == IntervalDate.QUARTER) {
+                parsedDate = DateTimeHandler.dateSetZeroDay(entry.getKey());
+                formatDate = "yyyy-MM-dd";
+            } else if (intreval == IntervalDate.DAY){
+                parsedDate = entry.getKey();
+                formatDate = "yyyy-MM-dd HH";
+            }
+            else {
+                parsedDate = entry.getKey();
+                formatDate = "yyyy-MM-dd";
+            }
+
+            LOGGER.log(Level.INFO, "string date: " + DateTimeHandler.convertStringToDate(parsedDate, formatDate));
+            LOGGER.log(Level.INFO, "long time: " + DateTimeHandler.convertDateToLongTime(DateTimeHandler.convertStringToDate(parsedDate, formatDate)));
+            newMap.put(DateTimeHandler.convertDateToLongTime(DateTimeHandler.convertStringToDate(parsedDate, formatDate)), entry.getValue());
+        }
+        LOGGER.log(Level.INFO, "newMap: " + newMap.keySet());
+        SortedSet<Long> keys = new TreeSet<>(newMap.keySet());
+        double[] listValuesMetric = new double[keys.size()];
+
+        int i = 0;
+        for (Long key : keys) {
+            Double value = newMap.get(key);
+            LOGGER.log(Level.INFO, "sorted key and value: " + key + " - " + value);
+            // do something
+            listValuesMetric[i] = value;
+            LOGGER.log(Level.INFO, "listValuesMetric[i]: " + listValuesMetric[i]);
+            LOGGER.log(Level.INFO, "listValuesMetric: " + Arrays.toString(listValuesMetric));
+            i++;
+        }
+        LOGGER.log(Level.INFO, "listValuesMetric: " + Arrays.toString(listValuesMetric));
+        double[] arrWeights = LinearRegressionHandler.calculateWeightMetric(listValuesMetric);
+        LOGGER.log(Level.INFO, "arrWeights: " + Arrays.toString(arrWeights));
+        LOGGER.log(Level.INFO, "listValuesMetric: " + Arrays.toString(listValuesMetric));
+        double predictedNextValue = LinearRegressionHandler.linearRegression(listValuesMetric, arrWeights);
+
+        DecimalFormatSymbols separator = new DecimalFormatSymbols();
+        separator.setDecimalSeparator('.');
+
+        DecimalFormat df = new DecimalFormat("#.##", separator);
+        
+        LOGGER.log(Level.INFO, "predictedNextValue format: " + df.format(predictedNextValue));
+        predictedNextValue = Double.valueOf(df.format(predictedNextValue));
+
+        return predictedNextValue;
+
+    }
 }
+
 
 
 \end{lstlisting}
@@ -355,6 +429,15 @@ public class DateTimeHandler {
         Date date = new Date(time);
         return date;
     }
+
+    public static Date convertStringToDate(String dateString, String format) throws ParseException {
+        SimpleDateFormat formatter = new SimpleDateFormat(format);
+        Date date = formatter.parse(dateString);
+        return date;
+    }
+
+
+
     /*
      * date format = yyyy MM dd HH:mm:ss
      *
@@ -407,6 +490,16 @@ public class DateTimeHandler {
         cal.set(Calendar.MINUTE, 0);
         cal.set(Calendar.SECOND, 0);
         return dateToString(cal.getTime(), "yyyy-MM-dd HH:mm:ss");
+    }
+
+    public static String dateSetZeroDay(String dateString) throws ParseException {
+
+        SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM");
+        Date date = sdf.parse(dateString);
+        Calendar cal = Calendar.getInstance();
+        cal.setTime(date);
+        cal.set(Calendar.DAY_OF_MONTH, 1);
+        return dateToString(cal.getTime(), "yyyy-MM-dd");
     }
 
     /**
@@ -584,10 +677,10 @@ public class DateTimeHandler {
      * **/
 
     public static HashMap<String, HashMap<String,Integer>> createDateQuarterMapSuccessRate() {
-        ZonedDateTime dateTime = ZonedDateTime.now().minusMonths(4);
+        ZonedDateTime dateTime = ZonedDateTime.now().minusMonths(3);
         LOGGER.log(Level.INFO, "dateTime QuarterMapSuccess" + dateTime);
         HashMap<String, HashMap<String,Integer>> successFailSuccess = new HashMap();
-        int lenQuarterSuccess = 4;
+        int lenQuarterSuccess = 3;
         LOGGER.log(Level.INFO, "lenQuarterSuccess QuarterMapSuccess: " + lenQuarterSuccess);
         for (int i = 1; i <= lenQuarterSuccess; i++) {
 
@@ -692,10 +785,10 @@ public class DateTimeHandler {
      *
      * **/
     public static HashMap<String, Integer> createDateQuarterMapTestCount() {
-        ZonedDateTime dateTime = ZonedDateTime.now().minusMonths(4);
+        ZonedDateTime dateTime = ZonedDateTime.now().minusMonths(3);
         LOGGER.log(Level.INFO, "last quarter dateTime test" + dateTime);
         HashMap<String, Integer> quarterDuration = new HashMap<String, Integer>();
-        int lengthQuarter = 4; // any year length in month
+        int lengthQuarter = 3; // any year length in month
         LOGGER.log(Level.INFO, "lengthQuarter test: " + lengthQuarter);
         for (int i = 1; i <= lengthQuarter; i++) {
 
@@ -780,10 +873,10 @@ public class DateTimeHandler {
      *
      * **/
     public static HashMap<String, List<Double>> createDateQuarterMap() {
-        ZonedDateTime dateTime = ZonedDateTime.now().minusMonths(4);
+        ZonedDateTime dateTime = ZonedDateTime.now().minusMonths(3);
         LOGGER.log(Level.INFO, "last quarter dateTime" + dateTime);
         HashMap<String, List<Double>> quarterDuration = new HashMap<String, List<Double>>();
-        int lengthQuarter = 4; // any year length in month
+        int lengthQuarter = 3; // any year length in month
         LOGGER.log(Level.INFO, "lengthQuarter: " + lengthQuarter);
         for (int i = 1; i <= lengthQuarter; i++) {
 
@@ -854,6 +947,8 @@ public class DateTimeHandler {
         return successFailSuccess;
     }
 }
+
+
 
 
 
@@ -1580,6 +1675,80 @@ enum Statistics {
     SDUNBIASED,
     MODE
 }
+
+
+
+\end{lstlisting}
+
+Код LinearRegressionHandler.java
+
+\begin{lstlisting}
+package io.jenkins.plugins.sample;
+
+import org.apache.commons.math3.fitting.WeightedObservedPoints;
+import org.apache.commons.math3.stat.regression.OLSMultipleLinearRegression;
+import org.apache.commons.math3.stat.regression.SimpleRegression;
+
+import java.util.Arrays;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+public  class LinearRegressionHandler {
+
+    static Logger LOGGER = Logger.getLogger(LinearRegressionHandler.class.getName());
+
+    static double linearRegression(double[] yUnweighted, double[] weights) {
+
+
+        double[] y = new double[yUnweighted.length];
+        double[][] x = new double[yUnweighted.length][2];
+
+        for (int i = 0; i < y.length; i++) {
+            LOGGER.log(Level.INFO, "yUnweighted i: " + yUnweighted[i]);
+            LOGGER.log(Level.INFO, "weights i: " + weights[i]);
+            y[i] = Math.sqrt(weights[i]) * yUnweighted[i];
+            x[i][0] = Math.sqrt(weights[i]) * i + 1;
+            x[i][1] = Math.sqrt(weights[i]);
+            LOGGER.log(Level.INFO, "y[i]: " +y[i]);
+            LOGGER.log(Level.INFO, "x[i][0]: " + x[i][0]);
+        }
+
+        OLSMultipleLinearRegression regression = new OLSMultipleLinearRegression();
+        regression.setNoIntercept(true);
+        regression.newSampleData(y, x);
+
+        double[] regressionParameters = regression.estimateRegressionParameters();
+        double slope = regressionParameters[0];
+        double intercept = regressionParameters[1];
+
+        double predictedValue = slope * (yUnweighted.length + 1)+ intercept;
+        LOGGER.log(Level.INFO, "y = " + slope + "*x + " + intercept);
+        LOGGER.log(Level.INFO, "predicted = " + predictedValue);
+        return predictedValue;
+    }
+
+    public static double[] calculateWeightMetric(double[] arrMetricValues) {
+        LOGGER.log(Level.INFO, "arrMetricValues: " + Arrays.toString(arrMetricValues));
+        double averageMetric = Arrays.stream(arrMetricValues).average().orElse(Double.NaN);
+        LOGGER.log(Level.INFO, "averageMetric: " + averageMetric);
+        double initialWeight = 1.0;
+        double stepWeight = initialWeight/(arrMetricValues.length *2);
+        double[] arrWeights = new double[arrMetricValues.length];
+        LOGGER.log(Level.INFO, "stepWeight: " + stepWeight);
+        for (int i = arrMetricValues.length - 1; i >= 0; i--) {
+            if (arrMetricValues[i] < 0.5 * averageMetric) {
+                arrWeights[i] = 0;
+            } else {
+                arrWeights[i] = initialWeight;
+            }
+
+            initialWeight-=stepWeight;
+        }
+        return arrWeights;
+    }
+
+}
+
 
 
 
